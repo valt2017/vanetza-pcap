@@ -32,6 +32,9 @@
 #include <random>
 #include <map>
 
+//wireshark file
+#include <pcap.h>
+
 namespace vanetza
 {
 
@@ -261,8 +264,19 @@ public:
      */
     NextHop forwarding_algorithm_selection(PendingPacketForwarding&&, const LinkLayer* ll = nullptr);
 
+    void set_dump(bool dump_pcap);
+
 private:
     typedef std::map<UpperProtocol, TransportInterface*> transport_map_t;
+    /**
+     * \brief dump packet to pcap file.
+     *
+     * \param packet variant to dump
+     * \param dest destination MAC address
+     * \param src source MAC address
+     * \param proto protocol
+     */
+    void dump_packet(const vanetza::PacketVariant& packet, const MacAddress& dest, const MacAddress& src, uint16be_t proto);
 
     /**
      * \brief Send Beacon packet to all neighbours with updated position vector.
@@ -560,6 +574,8 @@ private:
     Repeater m_repeater;
     std::mt19937 m_random_gen;
     GbcMemory m_gbc_memory;
+    bool m_dump_pcap;
+    pcap_dumper_t* m_dump;
 };
 
 /**

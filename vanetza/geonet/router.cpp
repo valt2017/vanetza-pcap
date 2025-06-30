@@ -30,6 +30,11 @@
 #include <tuple>
 #include <type_traits>
 
+#include <boost/algorithm/hex.hpp>
+#include <vanetza/geonet/address.hpp>
+#include <vanetza/geonet/serialization_buffer.hpp>
+#include <vanetza/net/ethernet_header.hpp>
+
 namespace vanetza
 {
 namespace geonet
@@ -145,7 +150,10 @@ Router::Router(Runtime& rt, const MIB& mib) :
     m_local_sequence_number(0),
     m_repeater(m_runtime,
             std::bind(&Router::dispatch_repetition, this, std::placeholders::_1, std::placeholders::_2)),
-    m_random_gen(mib.vanetzaDefaultSeed)
+    m_random_gen(mib.vanetzaDefaultSeed),
+    m_dump(nullptr),
+    m_dump_pcap(false)
+
 {
     if (!m_mib.vanetzaDisableBeaconing) {
         if (m_mib.vanetzaDeferInitialBeacon > Clock::duration::zero()) {
@@ -164,7 +172,33 @@ Router::Router(Runtime& rt, const MIB& mib) :
 
 Router::~Router()
 {
+    if(m_dump_pcap){
+        if(m_dump) {
+            pcap_dump_close(m_dump);
+        }
+    }
+
     m_runtime.cancel(this);
+}
+
+void Router::set_dump(bool dump_pcap)
+{
+    m_dump_pcap = dump_pcap;
+}
+
+void Router::dump_packet(const vanetza::PacketVariant& packet, const MacAddress& dest, const MacAddress& src, uint16be_t proto)
+{
+    if(m_dump){
+        ByteBuffer header = create_ethernet_header(dest, src, proto);
+        auto view = create_byte_view(packet, OsiLayer::Network, OsiLayer::Application);
+        header.insert(header.end(), view.begin(), view.end());
+        // dump to pcap format
+        struct pcap_pkthdr pcap_hdr;
+        pcap_hdr.caplen = header.size();
+        pcap_hdr.len = pcap_hdr.caplen;
+        gettimeofday(&pcap_hdr.ts, NULL);
+        pcap_dump((u_char *)m_dump, &pcap_hdr, header.data());
+    }
 }
 
 void Router::update_position(const PositionFix& position_fix)
@@ -212,6 +246,20 @@ void Router::set_dcc_field_generator(DccFieldGenerator* dcc)
 void Router::set_address(const Address& addr)
 {
     m_local_position_vector.gn_addr = addr;
+    // mac addres is used as the filename, maybe also timestamp should be added...
+    if(m_dump_pcap){
+        if(m_dump){
+            pcap_dump_close(m_dump);
+        }
+        // logging to pcap file - name is: "MAC address".pcap
+        pcap_t *handle = pcap_open_dead(DLT_EN10MB, 1 << 16);
+        ByteBuffer buffMac;
+        geonet::serialize_into_buffer(addr.mid(), buffMac);
+        std::string strMac;
+        boost::algorithm::hex(buffMac.begin(), buffMac.end(), back_inserter(strMac));
+        std::string strMacTx = "./" + strMac + ".pcap";
+        m_dump = pcap_dump_open(handle, strMacTx.c_str());
+    }
 }
 
 void Router::set_random_seed(std::uint_fast32_t seed)
@@ -379,6 +427,10 @@ void Router::indicate(UpPacketPtr packet, const MacAddress& sender, const MacAdd
         IndicationContext::LinkLayer link_layer;
         link_layer.sender = sender;
         link_layer.destination = destination;
+        // maybe there's a better place to dump, also rejected packets are saved at the moment
+        if(m_dump_pcap){
+            dump_packet(*packet, destination, sender, host_cast<uint16_t>(0x8947));
+        }
 
         if (auto cohesive = boost::get<CohesivePacket>(packet.get())) {
             IndicationContextDeserialize ctx(std::move(packet), *cohesive, link_layer);
@@ -681,6 +733,10 @@ void Router::pass_down(const dcc::DataRequest& request, PduPtr pdu, DownPacketPt
     }
 
     (*payload)[OsiLayer::Network] = ByteBufferConvertible(std::move(pdu));
+
+    if(m_dump_pcap){
+        dump_packet(*payload, request.destination, request.source, request.ether_type);
+    }
     assert(m_request_interface);
     m_request_interface->request(request, std::move(payload));
 }

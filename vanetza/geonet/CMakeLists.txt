@@ -1,3 +1,5 @@
+find_package(PCAP REQUIRED)
+
 set(CXX_SOURCES
     address.cpp
     areas.cpp
@@ -44,6 +46,6 @@ set(CXX_SOURCES
 add_vanetza_component(geonet ${CXX_SOURCES})
 target_link_libraries(geonet PRIVATE GeographicLib::GeographicLib)
 target_link_libraries(geonet PUBLIC Boost::date_time)
-target_link_libraries(geonet PUBLIC dcc net security)
+target_link_libraries(geonet PUBLIC dcc net security ${PCAP_LIBRARIES})
 
 add_test_subdirectory(tests)
